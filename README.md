@@ -70,7 +70,7 @@ More details: [dekhoprime.live/download](https://dekhoprime.live/download)
 
 This project **does not host or own** streaming content. Links and streams are aggregated from **publicly available third-party sources**. Channel names, logos, and media rights belong to their respective owners.
 
-If you are a copyright owner and want something removed, please [open an issue](https://github.com/imShakil/bdix/issues) or email [dekhoprime@imshakil.33mail.com](mailto:dekhoprime@imshakil.33mail.com).
+If you are a copyright owner and want something removed, please [open an issue](https://github.com/imShakil/bdix/issues) or email [hello@dekhoprime.live](mailto:hello@dekhoprime.live).
 
 Use at your own responsibility.
 
@@ -85,6 +85,3 @@ If you like Dekho Prime:
 * Star this repository
 * Report broken links via [Issues](https://github.com/imShakil/bdix/issues)
 
----
-
-*Bangladesh IPTV, BD IPTV playlist, Bangla IPTV free, watch Bangladeshi TV online, Bangladesh TV live streaming, IPTV M3U Bangladesh, free Bangla TV channels, Bangla live TV streaming, Bangladesh IPTV m3u playlist, sports iptv, cricket, Dekho Prime movies shows anime.*
