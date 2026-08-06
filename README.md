@@ -29,7 +29,7 @@ Stay up to date on the official **Dekho Prime Blog**:
 | **Facebook** | [fb.com/dekhoprime.live](https://fb.com/dekhoprime.live) |
 | **Instagram** | [instagram.com/dekhoprime.live](https://instagram.com/dekhoprime.live) |
 | **Telegram** | [t.me/dekhoprime](https://t.me/dekhoprime) |
-| **Email** | [dekhoprime@imshakil.33mail.com](mailto:dekhoprime@imshakil.33mail.com) |
+| **Email** | [hello@dekhoprime.live](mailto:hello@dekhoprime.live) |
 
 Telegram community (updates & support): [https://t.me/+DBjA_AdCuoY1MTQ9](https://t.me/+DBjA_AdCuoY1MTQ9)
 
