@@ -1,4 +1,4 @@
-# Dekho Prime – An free entertainment hub
+# Dekho Prime – The Free Entertainment Hub
 
 [![Stars](https://img.shields.io/github/stars/imshakil/bdix.svg?style=social)](https://github.com/imShakil/bdix/stargazers)
 [![Forks](https://img.shields.io/github/forks/imshakil/bdix.svg?style=social)](https://github.com/imShakil/bdix/network/members)
