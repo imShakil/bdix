@@ -1,0 +1,436 @@
+// linking — fixed version
+
+(function() {
+  var adList = [
+    "https://spreadpreferencetelevision.com/tba2ybi8y?key=e9181f1e0055b64f2438c9cf18ca8880",
+    "https://spreadpreferencetelevision.com/x2fusvgn?key=2531ef9b0b688c0f6205ee45da3c50de"
+    // FIX 1: removed duplicate entry (was repeated as index 2)
+  ];
+
+  var SECRET_KEY = "XP_DekhoPrimeBlog2027";
+  var WAIT_TIME = 15;
+  var MARKER_SELECTOR = '#unlock-link, .unlock-link, [data-unlock-link], [id*="unlock-link"]:not([id^="unlock-link-host-"])';
+  var scanScheduled = false;
+  var initialized = false;
+
+  var statusTexts = [
+    "Syncing Node...",
+    "Verifying View...",
+    "Encrypting Connection...",
+    "BDIX Routing Check...",
+    "Finalizing Protocol..."
+  ];
+
+  function xorDecrypt(hex, key) {
+    var result = "";
+    for (var i = 0; i < hex.length; i += 2) {
+      var code = parseInt(hex.substr(i, 2), 16) ^ key.charCodeAt((i / 2) % key.length);
+      result += String.fromCharCode(code);
+    }
+    return result;
+  }
+
+  // Open the ad link in a real browser tab.
+
+  function openInBrowser(url) {
+    var opened = null;
+
+    // 1) Preferred: real browser tab via window.open with explicit features.
+    //    Passing a non-empty features string keeps Chrome from treating this
+    //    as a popup window and lets it land in a normal tab.
+    try {
+      opened = window.open(url, '_blank', 'noopener,noreferrer,width=1,height=1');
+    } catch (e1) {
+      opened = null;
+    }
+
+    // 2) Anchor fallback. This is the path that almost always works, and
+    //    it lets Adsterra's redirect chain run inside a real tab.
+    var a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer nofollow';
+    a.style.cssText = 'display:none;';
+    document.body.appendChild(a);
+    a.click();
+
+    // If window.open already produced a real handle, the anchor click above
+    // would open a *second* tab. To avoid that, we delay removal just long
+    // enough for the click to be processed, but only when the popup call
+    // succeeded — otherwise the anchor click is the only thing the user
+    // has, so we keep the element around for the manual-fallback path.
+    if (opened) {
+      setTimeout(function() {
+        if (a && a.parentNode) a.parentNode.removeChild(a);
+      }, 0);
+      try { opened.focus(); } catch (e2) {}
+    }
+
+    // 3) Manual fallback (sandboxed contexts, popup blockers that also
+    //    suppress synthetic anchor clicks). Surface a visible "Open ad"
+    //    button the user can click themselves.
+    if (!opened) {
+      try {
+        a.textContent = 'Click here to open the ad';
+        a.style.cssText =
+          'display:inline-block;background:#0984e3;color:#fff;' +
+          'padding:8px 14px;border-radius:6px;text-decoration:none;' +
+          'font-weight:700;font-size:13px;margin-top:8px;';
+      } catch (e3) {}
+    }
+
+    return opened;
+  }
+
+  function normalizeUrl(value) {
+    var raw = (value || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (/^\/\//.test(raw)) return 'https:' + raw;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?(?:\/|$)/i.test(raw)) {
+      return 'https://' + raw;
+    }
+    return '';
+  }
+
+  function extractUrlLike(value) {
+    var raw = (value || '').trim();
+    if (!raw) return '';
+    var m = raw.match(/https?:\/\/[^\s"'<>]+|\/\/[^\s"'<>]+|[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?\/[^\s"'<>]+/i);
+    return m ? m[0] : '';
+  }
+
+  function extractHexPayload(value) {
+    var raw = (value || '').trim();
+    if (!raw) return '';
+    var compact = raw.replace(/\s+/g, '');
+    if (/^[0-9a-f]+$/i.test(compact) && compact.length >= 16 && compact.length % 2 === 0) {
+      return compact;
+    }
+    var m = compact.match(/[0-9a-f]{16,}/ig);
+    if (!m) return '';
+    for (var i = 0; i < m.length; i++) {
+      if (m[i].length % 2 === 0) return m[i];
+    }
+    return '';
+  }
+
+  function injectStyles() {
+    if (document.getElementById('locker-styles')) return;
+    var style = document.createElement('style');
+    style.id = 'locker-styles';
+    style.textContent = [
+      '.locker-box{background:#fff;border-radius:10px;padding:20px;text-align:center;margin:15px auto;max-width:400px;width:100%;box-shadow:0 5px 20px rgba(0,0,0,0.08);border:1px solid #f0f3f5;font-family:sans-serif;box-sizing:border-box;}',
+      '.locker-box h3{margin:0 0 8px;color:#2d3436;font-size:18px;font-weight:700;}',
+      '.locker-box p{margin:0 0 20px;color:#636e72;font-size:13px;line-height:1.4;}',
+      '.locker-progress-wrap{width:100%;height:8px;background:#f1f2f6;border-radius:10px;overflow:hidden;margin-bottom:15px;}',
+      '.locker-progress-bar{width:0%;height:100%;background:#0984e3;transition:width 0.3s ease;}',
+      '.locker-status-row{display:flex;justify-content:space-between;margin-bottom:8px;font-size:12px;font-weight:bold;color:#2d3436;}',
+      '.locker-btn{background:#0984e3;color:#fff;border:none;padding:12px 25px;border-radius:6px;font-weight:700;cursor:pointer;width:100%;font-size:14px;text-transform:uppercase;font-family:sans-serif;transition:0.2s;}',
+      '.locker-btn:disabled{background:#b2bec3;cursor:not-allowed;}',
+      '.locker-btn-success{background:#00b894;}',
+      '.locker-warning{display:none;background:#fff9db;color:#e67e22;padding:8px;border-radius:6px;font-size:11px;font-weight:bold;border:1px solid #ffe066;margin-top:10px;}',
+      '.locker-inline-msg{display:none;background:#fff4f4;color:#d63031;padding:8px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid #ffcccc;margin-top:10px;}',
+      '.locker-placeholder{color:#636e72;font-size:13px;}',
+    ].join('');
+    document.head.appendChild(style);
+  }
+
+  function renderLocker(target, destinationURL) {
+    target.style.display = 'block';
+    target.innerHTML =
+      '<div class="locker-box">' +
+        '<div class="lk-start">' +
+          '<div style="font-size:32px;margin-bottom:8px;">&#128274;</div>' +
+          '<h3>Link Encrypted</h3>' +
+          '<p>Unlock with 15-second ad verification.</p>' +
+          '<button class="locker-btn lk-btn-start">UNLOCK NOW</button>' +
+          '<div class="locker-inline-msg lk-inline-msg"></div>' +
+        '</div>' +
+        '<div class="lk-process" style="display:none;">' +
+          '<div class="locker-status-row">' +
+            '<span class="lk-status">Initializing...</span>' +
+            '<span class="lk-percent">0%</span>' +
+          '</div>' +
+          '<div class="locker-progress-wrap">' +
+            '<div class="locker-progress-bar"></div>' +
+          '</div>' +
+          '<div class="locker-warning lk-warning"></div>' +
+        '</div>' +
+        '<div class="lk-final" style="display:none;">' +
+          '<div style="font-size:32px;margin-bottom:8px;">&#9989;</div>' +
+          '<h3 style="color:#00b894;">Verification Success</h3>' +
+          '<button class="locker-btn locker-btn-success lk-btn-copy">COPY LINK</button>' +
+        '</div>' +
+      '</div>';
+
+    var stepStart   = target.querySelector('.lk-start');
+    var stepProcess = target.querySelector('.lk-process');
+    var stepFinal   = target.querySelector('.lk-final');
+    var progressBar = target.querySelector('.locker-progress-bar');
+    var percentText = target.querySelector('.lk-percent');
+    var statusMsg   = target.querySelector('.lk-status');
+    var warningBox  = target.querySelector('.lk-warning');
+    var inlineMsg   = target.querySelector('.lk-inline-msg');
+    var btnStart    = target.querySelector('.lk-btn-start');
+    var btnCopy     = target.querySelector('.lk-btn-copy');
+
+    var adWindow = null;
+    var timeLeft = WAIT_TIME;
+    var timerInterval = null;
+    var started = false;
+
+    // FIX 4: cleanup interval on page unload to prevent memory leaks
+    window.addEventListener('beforeunload', function() {
+      if (timerInterval) clearInterval(timerInterval);
+    });
+
+    btnStart.addEventListener('click', function() {
+      if (started) return;
+      started = true;
+
+      if (inlineMsg) {
+        inlineMsg.style.display = 'none';
+        inlineMsg.textContent = '';
+      }
+
+      var randomLink = adList[Math.floor(Math.random() * adList.length)];
+      adWindow = openInBrowser(randomLink);
+
+      // Note: when the anchor-click fallback opened the tab, `adWindow`
+      // is null but the ad tab *is* still opening. We only treat this as
+      // a hard failure if neither path produced evidence of a tab. The
+      // document.hidden check below is what actually drives progress.
+      if (!adWindow) {
+        // No popup handle — the anchor fallback path is our only hope.
+        // If the user is sandboxed or popups are fully blocked, the
+        // document.hidden check will never fire and the timer stays paused
+        // with the "Stay on Ad Page" warning. We add a softer hint here.
+        if (inlineMsg) {
+          inlineMsg.style.display = 'block';
+          inlineMsg.textContent = 'If the ad tab did not open, allow popups and try again.';
+        }
+      }
+
+      stepStart.style.display = 'none';
+      stepProcess.style.display = 'block';
+
+      timerInterval = setInterval(function() {
+
+        // FIX 3: reset started flag so user can retry after abort.
+        // Only meaningful when window.open returned a real handle.
+        // When the anchor-fallback opened the tab, adWindow is null and
+        // we rely on document.hidden to detect "user left this tab".
+        if (adWindow && adWindow.closed) {
+          warningBox.style.display = 'block';
+          warningBox.textContent = '⚠️ Ad Closed! Please reload and try again.';
+          statusMsg.textContent = 'Process Aborted';
+          started = false;
+          clearInterval(timerInterval);
+          return;
+        }
+
+        // FIX 2: was (!document.hidden) — completely inverted.
+        // document.hidden === true  → user is on the ad tab (away from this page) → count down.
+        // document.hidden === false → user is back on this page → pause and warn.
+        if (!document.hidden) {
+          warningBox.style.display = 'block';
+          warningBox.textContent = '⚠️ Stay on Ad Page to Continue!';
+          statusMsg.textContent = 'Timer Paused';
+          return;
+        }
+
+        // User is on ad tab — count down
+        warningBox.style.display = 'none';
+        timeLeft--;
+
+        var percent = Math.floor(((WAIT_TIME - timeLeft) / WAIT_TIME) * 100);
+        progressBar.style.width = percent + '%';
+        percentText.textContent = percent + '%';
+
+        if (timeLeft % 4 === 0) {
+          statusMsg.textContent = statusTexts[Math.floor(Math.random() * statusTexts.length)];
+        }
+
+        if (timeLeft <= 0) {
+          clearInterval(timerInterval);
+          stepProcess.style.display = 'none';
+          stepFinal.style.display = 'block';
+        }
+
+      }, 1000);
+    });
+
+    btnCopy.addEventListener('click', function() {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(destinationURL).then(function() {
+          btnCopy.textContent = 'COPIED! ✅';
+          setTimeout(function() { window.location.href = destinationURL; }, 1000);
+        });
+      } else {
+        var tmp = document.createElement('input');
+        tmp.value = destinationURL;
+        tmp.style.cssText = 'position:fixed;opacity:0;';
+        document.body.appendChild(tmp);
+        tmp.select();
+        document.execCommand('copy');
+        document.body.removeChild(tmp);
+        btnCopy.textContent = 'COPIED! ✅';
+        setTimeout(function() { window.location.href = destinationURL; }, 1000);
+      }
+    });
+  }
+
+  function getOrCreateRenderHost(node) {
+    if (node.classList && node.classList.contains('unlock-link-host')) return node;
+
+    var existingHostId = node.getAttribute('data-locker-host-id');
+    if (existingHostId) {
+      var existingHost = document.getElementById(existingHostId);
+      if (existingHost) return existingHost;
+    }
+
+    var host = document.createElement('div');
+    var hostId = 'unlock-link-host-' + Math.random().toString(36).slice(2, 10);
+    host.id = hostId;
+    host.className = 'unlock-link-host';
+
+    if (node.parentNode) {
+      node.parentNode.insertBefore(host, node.nextSibling);
+    }
+
+    node.setAttribute('data-locker-host-id', hostId);
+    return host;
+  }
+
+  function isLockerHostNode(node) {
+    return !!(node && node.nodeType === 1 && node.classList && node.classList.contains('unlock-link-host'));
+  }
+
+  function toElement(node) {
+    if (!node) return null;
+    if (node.nodeType === 1) return node;
+    if (node.nodeType === 3) return node.parentElement;
+    return null;
+  }
+
+  function isMarkerNode(node) {
+    var el = toElement(node);
+    if (!el || isLockerHostNode(el)) return false;
+    try { return el.matches(MARKER_SELECTOR); } catch(e) { return false; }
+  }
+
+  function containsMarkerNode(node) {
+    var el = toElement(node);
+    if (!el || isLockerHostNode(el)) return false;
+    if (isMarkerNode(el)) return true;
+    if (!el.querySelector) return false;
+    return !!el.querySelector(MARKER_SELECTOR);
+  }
+
+  function scheduleScan() {
+    if (scanScheduled) return;
+    scanScheduled = true;
+    setTimeout(function() {
+      scanScheduled = false;
+      scanAndInit();
+    }, 50);
+  }
+
+  function scanAndInit() {
+    var list = Array.prototype.slice.call(document.querySelectorAll(MARKER_SELECTOR));
+
+    list.forEach(function(node) {
+      if (isLockerHostNode(node)) return;
+
+      var host = getOrCreateRenderHost(node);
+      if (host !== node) node.style.display = 'none';
+      if (host.getAttribute('data-locker-init') === 'true') return;
+
+      var encrypted = (
+        node.getAttribute('data-encrypted') ||
+        node.getAttribute('data-token') ||
+        node.getAttribute('data-url') ||
+        node.textContent ||
+        ''
+      ).trim();
+
+      if (!encrypted) {
+        if (!host.querySelector('.locker-box')) {
+          host.style.display = 'block';
+          host.innerHTML = '<div class="locker-box"><div class="locker-placeholder">Preparing secure link...</div></div>';
+        }
+        return;
+      }
+
+      var decrypted = '';
+      try {
+        var directUrl = normalizeUrl(encrypted) || normalizeUrl(extractUrlLike(encrypted));
+        if (directUrl) {
+          decrypted = directUrl;
+        } else {
+          var hexPayload = extractHexPayload(encrypted);
+          if (hexPayload) {
+            decrypted = normalizeUrl(xorDecrypt(hexPayload, SECRET_KEY));
+          }
+        }
+      } catch(e) { decrypted = ''; }
+
+      if (!decrypted) {
+        host.style.display = 'block';
+        host.innerHTML = '<div class="locker-box"><h3>Link Unavailable</h3><p>Unlock payload is missing or invalid. Please refresh the page.</p></div>';
+        host.removeAttribute('data-locker-init');
+        return;
+      }
+
+      try {
+        renderLocker(host, decrypted);
+        host.setAttribute('data-locker-init', 'true');
+      } catch(e) {
+        host.style.display = 'block';
+        host.innerHTML = '<div class="locker-box"><h3>Link Unavailable</h3><p>Failed to render unlock layout. Please refresh the page.</p></div>';
+        host.setAttribute('data-locker-init', 'true');
+      }
+    });
+  }
+
+  function init() {
+    if (initialized) return;
+    initialized = true;
+
+    injectStyles();
+    scanAndInit();
+
+    new MutationObserver(function(mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var mutation = mutations[i];
+        var targetEl = toElement(mutation.target);
+
+        if (targetEl && targetEl.closest && targetEl.closest('.unlock-link-host')) continue;
+
+        if (mutation.type === 'characterData') {
+          if (isMarkerNode(targetEl)) { scheduleScan(); return; }
+          continue;
+        }
+
+        if (mutation.type === 'childList') {
+          if (containsMarkerNode(targetEl)) { scheduleScan(); return; }
+          for (var j = 0; j < mutation.addedNodes.length; j++) {
+            if (containsMarkerNode(mutation.addedNodes[j])) { scheduleScan(); return; }
+          }
+        }
+      }
+    }).observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+})();
