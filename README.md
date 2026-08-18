@@ -13,6 +13,11 @@
 
 ## Blog — guides, playlists & updates
 
+![iptv playlist download](./files/dekhoprime_sports_m3u8.jpg)
+
+Download BD, Sports, All m3u8 IPTV playlist from our blog. 
+Download link: [https://blog.dekhoprime.live/search/label/IPTV](https://blog.dekhoprime.live/search/label/IPTV)
+
 Stay up to date on the official **Dekho Prime Blog**:
 
 ### [blog.dekhoprime.live](https://blog.dekhoprime.live)
