@@ -1,7 +1,8 @@
 /**
  * PostPilot Link Locker & Sponsor Verification Widget
  * Dekho Prime — Adsterra Smartlink dwell lock
- *
+ * Author: @imShakil
+ * Updated: 24th August, 2026
  * Unlock rules:
  * 1. Ad blocker must be paused (Smartlink host reachable). Site-only allowlist is not enough.
  * 2. One Adsterra Smartlink tab is opened and we keep the Window handle (no noopener).
