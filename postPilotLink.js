@@ -1,13 +1,13 @@
 /**
  * PostPilot Link Locker & Sponsor Verification Widget
- * Dekho Prime — Optimized & Smooth Version
+ * Dekho Prime — Adsterra Smartlink dwell lock
  *
- * Features & Fixes:
- * 1. Smooth Background Timer: Uses Date.now() timestamp delta so timer never stalls when user is viewing the ad tab.
- * 2. Real Browser Tabs: Opens ad in standard new tab (_blank) without window.open dimensions that trigger popup window traps.
- * 3. Popup Blocker Recovery: Smooth fallback helper if the browser blocked the initial ad tab.
- * 4. Dual Action Unlocked State: 1-click "GET LINK" (direct navigation) + "COPY LINK" (for VLC/IPTV players).
- * 5. Modern Design System: Sleek dark-mode aesthetic matching Dekho Prime with responsive clamp() sizing and SVG icons.
+ * Unlock rules:
+ * 1. Ad blocker must be paused (Smartlink host reachable). Site-only allowlist is not enough.
+ * 2. One Adsterra Smartlink tab is opened and we keep the Window handle (no noopener).
+ * 3. 15s accrues only while that tab is still open AND the locker is in the background.
+ * 4. Closing the Smartlink tab before 15s resets progress to 0.
+ * 5. Destination href is not written into the DOM until dwell completes.
  */
 
 (function () {
@@ -19,18 +19,36 @@
   ];
 
   var SECRET_KEY = "XP_DekhoPrimeBlog2027";
-  var WAIT_TIME = 15; // 15 seconds verification
+  var WAIT_TIME = 15;
+  var REQUIRED_MS = WAIT_TIME * 1000;
+  var TICK_MS = 300;
+  var HOST_PROBE_MS = 4000;
   var MARKER_SELECTOR = '#unlock-link, .unlock-link, [data-unlock-link], [id*="unlock-link"]:not([id^="unlock-link-host-"])';
   var scanScheduled = false;
   var initialized = false;
 
-  var statusTexts = [
-    "Opening sponsor page…",
-    "Syncing secure node…",
+  var watchingStatusTexts = [
+    "Keep the Adsterra tab open…",
+    "Stay on the sponsor page…",
     "Verifying sponsor view…",
-    "Decrypting link protocol…",
+    "Almost there — do not close it…",
     "Finalizing access…"
   ];
+
+  var GET_LINK_LABEL = [
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>',
+    "GET LINK NOW"
+  ].join("");
+
+  var COPY_LINK_LABEL = [
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
+    "COPY LINK"
+  ].join("");
+
+  var COPIED_LABEL = [
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
+    "COPIED TO CLIPBOARD!"
+  ].join("");
 
   // ── Crypto & URL Parsing ──────────────────────────────────────────────────
 
@@ -76,33 +94,118 @@
     return "";
   }
 
-  // ── Clean Ad Tab Launcher ─────────────────────────────────────────────────
+  function pickSmartlink() {
+    return adList[Math.floor(Math.random() * adList.length)];
+  }
+
+  function getProbeUrl() {
+    var url = adList[0] || "";
+    return url + (url.indexOf("?") >= 0 ? "&" : "?") + "dp_probe=" + Date.now();
+  }
+
+  // ── Adsterra tab launcher (keep handle so we can poll closed) ─────────────
 
   function openAdTab(url) {
     var win = null;
     try {
-      // Standard new tab without width/height to avoid forced popup window
-      win = window.open(url, "_blank", "noopener,noreferrer");
+      win = window.open(url, "_blank");
     } catch (e) {
       win = null;
     }
+    if (!win) return null;
+    try {
+      if (win.closed) return null;
+    } catch (e2) {
+      return null;
+    }
+    return win;
+  }
 
-    if (!win) {
-      try {
-        var a = document.createElement("a");
-        a.href = url;
-        a.target = "_blank";
-        a.rel = "noopener noreferrer nofollow";
-        a.style.display = "none";
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function () {
-          if (a.parentNode) a.parentNode.removeChild(a);
-        }, 100);
-      } catch (e2) {}
+  function isAdOpen(win) {
+    if (!win) return false;
+    try {
+      return !win.closed;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isLockerHidden() {
+    return document.hidden === true || document.visibilityState === "hidden";
+  }
+
+  // ── Adblock probes ────────────────────────────────────────────────────────
+
+  function probeCosmeticBait() {
+    var bait = document.createElement("div");
+    bait.className = "pub_300x250 pub_300x250m pub_728x90 text-ad textAd text_ad adsbox adsbygoogle ad-banner advertisement ad-placement carbon-ads";
+    bait.setAttribute("aria-hidden", "true");
+    bait.innerHTML = "&nbsp;";
+    bait.style.cssText = "width:1px!important;height:1px!important;position:absolute!important;left:-10000px!important;top:-1000px!important;pointer-events:none!important;";
+    document.body.appendChild(bait);
+
+    var blocked = false;
+    try {
+      var style = window.getComputedStyle(bait);
+      blocked = (
+        bait.offsetParent === null ||
+        bait.offsetHeight === 0 ||
+        bait.offsetWidth === 0 ||
+        bait.clientHeight === 0 ||
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0"
+      );
+    } catch (e) {
+      blocked = false;
     }
 
-    return win;
+    if (bait.parentNode) bait.parentNode.removeChild(bait);
+    return blocked;
+  }
+
+  function probeSmartlinkHost(done) {
+    if (typeof fetch !== "function") {
+      done(false);
+      return;
+    }
+
+    var finished = false;
+    var timer = setTimeout(function () {
+      finish(true);
+    }, HOST_PROBE_MS);
+
+    function finish(blocked) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      done(blocked);
+    }
+
+    fetch(getProbeUrl(), {
+      method: "GET",
+      mode: "no-cors",
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "follow"
+    }).then(function () {
+      finish(false);
+    }).catch(function () {
+      finish(true);
+    });
+  }
+
+  function detectAdBlock(done) {
+    var cosmeticBlocked = false;
+    try {
+      cosmeticBlocked = probeCosmeticBait();
+    } catch (e) {
+      cosmeticBlocked = false;
+    }
+
+    probeSmartlinkHost(function (hostBlocked) {
+      done(!!(cosmeticBlocked || hostBlocked));
+    });
   }
 
   // ── Styles (Dekho Prime Theme) ────────────────────────────────────────────
@@ -121,17 +224,23 @@
       ".dp-locker-btn-main{background:linear-gradient(90deg,#ff6b35,#f7a635);color:#ffffff;border:none;padding:12px 20px;border-radius:10px;font-weight:700;font-size:clamp(13px,3.2vw,14px);cursor:pointer;width:100%;transition:all 0.2s ease;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;box-sizing:border-box;box-shadow:0 4px 15px rgba(255,107,53,0.3);}",
       ".dp-locker-btn-main:hover{opacity:0.92;transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,107,53,0.45);}",
       ".dp-locker-btn-main:active{transform:translateY(0);}",
+      ".dp-locker-btn-main:disabled{opacity:0.65;cursor:wait;transform:none;box-shadow:none;}",
+      ".dp-locker-btn-main:disabled:hover{opacity:0.65;transform:none;box-shadow:none;}",
       ".dp-locker-btn-sec{background:#12122a;color:#a0a0c0;border:1px solid #2d2d4e;padding:10px 18px;border-radius:10px;font-weight:600;font-size:clamp(12px,3vw,13px);cursor:pointer;width:100%;margin-top:10px;transition:all 0.2s ease;display:inline-flex;align-items:center;justify-content:center;gap:6px;box-sizing:border-box;}",
       ".dp-locker-btn-sec:hover{border-color:#ff6b35;color:#ffffff;background:#181836;}",
       ".dp-locker-btn-sec.copied{background:rgba(0,184,148,0.15);border-color:#00b894;color:#00b894;}",
       ".dp-locker-progress-wrap{width:100%;height:10px;background:#12122a;border-radius:20px;overflow:hidden;margin:16px 0 12px;border:1px solid #2d2d4e;}",
-      ".dp-locker-progress-bar{width:0%;height:100%;background:linear-gradient(90deg,#ff6b35,#f7c948);border-radius:20px;transition:width 0.4s ease;box-shadow:0 0 10px rgba(255,107,53,0.5);}",
-      ".dp-locker-status-row{display:flex;justify-content:space-between;align-items:center;font-size:clamp(11px,2.8vw,12px);font-weight:600;color:#a0a0c0;margin-bottom:6px;}",
-      ".dp-locker-timer-badge{color:#ff6b35;font-weight:700;background:rgba(255,107,53,0.12);padding:2px 8px;border-radius:6px;}",
+      ".dp-locker-progress-bar{width:0%;height:100%;background:linear-gradient(90deg,#ff6b35,#f7c948);border-radius:20px;transition:width 0.3s linear;box-shadow:0 0 10px rgba(255,107,53,0.5);}",
+      ".dp-locker-progress-bar.is-paused{opacity:0.45;}",
+      ".dp-locker-status-row{display:flex;justify-content:space-between;align-items:center;font-size:clamp(11px,2.8vw,12px);font-weight:600;color:#a0a0c0;margin-bottom:6px;gap:8px;}",
+      ".dp-locker-timer-badge{color:#ff6b35;font-weight:700;background:rgba(255,107,53,0.12);padding:2px 8px;border-radius:6px;flex-shrink:0;}",
+      ".dp-locker-timer-badge.is-paused{color:#f7c948;background:rgba(247,201,72,0.12);}",
       ".dp-locker-hint{font-size:clamp(11px,2.8vw,12px);color:#7c7c9e;margin-top:12px;line-height:1.4;}",
       ".dp-locker-hint a{color:#ff6b35;text-decoration:underline;cursor:pointer;font-weight:600;}",
       ".dp-locker-success-icon{width:44px;height:44px;border-radius:50%;background:rgba(0,184,148,0.15);color:#00b894;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;border:1px solid rgba(0,184,148,0.3);}",
       ".dp-locker-success-icon svg{width:24px;height:24px;fill:currentColor;}",
+      ".dp-locker-warn-icon{width:44px;height:44px;border-radius:50%;background:rgba(255,107,53,0.12);color:#ff6b35;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;border:1px solid rgba(255,107,53,0.3);}",
+      ".dp-locker-warn-icon svg{width:24px;height:24px;fill:currentColor;}",
       ".dp-locker-btn-group{display:flex;flex-direction:column;gap:10px;margin-top:16px;}",
       ".dp-locker-placeholder{color:#7c7c9e;font-size:13px;padding:12px 0;}"
     ].join("");
@@ -144,142 +253,340 @@
     target.style.display = "block";
     target.innerHTML = [
       '<div class="dp-locker-card">',
-        // State 1: Locked
         '<div class="dp-step-start">',
           '<div class="dp-locker-badge">',
             '<svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>',
-            'Protected Content',
-          '</div>',
+            "Protected Content",
+          "</div>",
           '<div class="dp-locker-title">Encrypted Access Link</div>',
-          '<div class="dp-locker-desc">Unlock instant access by completing a quick sponsor verification.</div>',
-          '<button class="dp-locker-btn-main dp-btn-start">',
+          '<div class="dp-locker-desc">Unlock access by opening the sponsor page and staying on it for 15 seconds. Pause your ad blocker first — allowlisting only this site is not enough.</div>',
+          '<button type="button" class="dp-locker-btn-main dp-btn-start">',
             '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>',
-            'UNLOCK LINK',
-          '</button>',
-        '</div>',
+            "UNLOCK LINK",
+          "</button>",
+        "</div>",
 
-        // State 2: Verifying / Watching Ad
+        '<div class="dp-step-blocked" style="display:none;">',
+          '<div class="dp-locker-warn-icon">',
+            '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>',
+          "</div>",
+          '<div class="dp-locker-badge">Ad Blocker Detected</div>',
+          '<div class="dp-locker-title">Pause your ad blocker</div>',
+          '<div class="dp-locker-desc">The sponsor page cannot load while an ad blocker is on. Pause or turn it off completely (not just this site), then try again.</div>',
+          '<button type="button" class="dp-locker-btn-main dp-btn-retry">I paused it — try again</button>',
+        "</div>",
+
         '<div class="dp-step-process" style="display:none;">',
-          '<div class="dp-locker-badge">',
-            '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm1-13h-2v6h6v-2h-4z"/></svg>',
-            'Verifying Sponsor View',
-          '</div>',
+          '<div class="dp-locker-badge dp-process-badge">Verifying Sponsor View</div>',
           '<div class="dp-locker-status-row">',
             '<span class="dp-status-msg">Opening sponsor page…</span>',
-            '<span class="dp-locker-timer-badge dp-timer-text">15s</span>',
-          '</div>',
+            '<span class="dp-locker-timer-badge dp-timer-text">' + WAIT_TIME + "s</span>",
+          "</div>",
           '<div class="dp-locker-progress-wrap">',
             '<div class="dp-locker-progress-bar"></div>',
-          '</div>',
-          '<div class="dp-locker-desc" style="margin-bottom:0;">Please keep the sponsor page open while verification completes.</div>',
+          "</div>",
+          '<div class="dp-locker-desc dp-process-desc" style="margin-bottom:0;">Keep the Adsterra tab open for 15 seconds. Do not close it.</div>',
           '<div class="dp-locker-hint">',
-            'Sponsor page didn\'t open? <a class="dp-btn-reopen">Click here to open</a>',
-          '</div>',
-        '</div>',
+            '<a class="dp-btn-reopen">Open the Adsterra tab</a>',
+          "</div>",
+        "</div>",
 
-        // State 3: Unlocked / Ready
         '<div class="dp-step-final" style="display:none;">',
           '<div class="dp-locker-success-icon">',
             '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>',
-          '</div>',
+          "</div>",
           '<div class="dp-locker-title" style="color:#00b894;">Link Unlocked!</div>',
           '<div class="dp-locker-desc">Verification complete. Your destination link is ready below.</div>',
           '<div class="dp-locker-btn-group">',
-            '<a class="dp-locker-btn-main dp-btn-get" href="' + destinationURL + '" target="_blank" rel="noopener noreferrer">',
-              '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>',
-              'GET LINK NOW',
-            '</a>',
-            '<button class="dp-locker-btn-sec dp-btn-copy">',
-              '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
-              'COPY LINK',
-            '</button>',
-          '</div>',
-        '</div>',
-      '</div>'
+            '<button type="button" class="dp-locker-btn-main dp-btn-get">',
+              GET_LINK_LABEL,
+            "</button>",
+            '<button type="button" class="dp-locker-btn-sec dp-btn-copy">',
+              COPY_LINK_LABEL,
+            "</button>",
+          "</div>",
+        "</div>",
+      "</div>"
     ].join("");
 
-    var stepStart   = target.querySelector(".dp-step-start");
+    var stepStart = target.querySelector(".dp-step-start");
+    var stepBlocked = target.querySelector(".dp-step-blocked");
     var stepProcess = target.querySelector(".dp-step-process");
-    var stepFinal   = target.querySelector(".dp-step-final");
+    var stepFinal = target.querySelector(".dp-step-final");
     var progressBar = target.querySelector(".dp-locker-progress-bar");
-    var timerText   = target.querySelector(".dp-timer-text");
-    var statusMsg   = target.querySelector(".dp-status-msg");
-    var btnStart    = target.querySelector(".dp-btn-start");
-    var btnReopen   = target.querySelector(".dp-btn-reopen");
-    var btnCopy     = target.querySelector(".dp-btn-copy");
+    var timerText = target.querySelector(".dp-timer-text");
+    var statusMsg = target.querySelector(".dp-status-msg");
+    var processDesc = target.querySelector(".dp-process-desc");
+    var processBadge = target.querySelector(".dp-process-badge");
+    var btnStart = target.querySelector(".dp-btn-start");
+    var btnRetry = target.querySelector(".dp-btn-retry");
+    var btnReopen = target.querySelector(".dp-btn-reopen");
+    var btnCopy = target.querySelector(".dp-btn-copy");
 
-    var startTime = null;
-    var timerInterval = null;
-    var started = false;
+    var adWin = null;
     var currentAdLink = "";
+    var accruedMs = 0;
+    var lastTick = 0;
+    var timerInterval = null;
+    var processActive = false;
+    var unlocked = false;
+    var busy = false;
+    var everOpened = false;
+    var lastOpenFailed = false;
+    var processMode = "watching";
 
-    function updateProgress() {
-      if (!started || !startTime) return;
+    function showStep(step) {
+      stepStart.style.display = step === "start" ? "block" : "none";
+      stepBlocked.style.display = step === "blocked" ? "block" : "none";
+      stepProcess.style.display = step === "process" ? "block" : "none";
+      stepFinal.style.display = step === "final" ? "block" : "none";
+    }
 
-      var now = Date.now();
-      var elapsedMs = now - startTime;
-      var elapsedSec = Math.floor(elapsedMs / 1000);
-      var remaining = Math.max(0, WAIT_TIME - elapsedSec);
-      var percent = Math.min(100, Math.floor((elapsedMs / (WAIT_TIME * 1000)) * 100));
+    function remainingSec() {
+      return Math.max(0, Math.ceil((REQUIRED_MS - accruedMs) / 1000));
+    }
 
+    function renderBar() {
+      var percent = Math.min(100, Math.floor((accruedMs / REQUIRED_MS) * 100));
       progressBar.style.width = percent + "%";
-      timerText.textContent = remaining > 0 ? remaining + "s" : "Ready!";
+      timerText.textContent = remainingSec() > 0 ? remainingSec() + "s" : "Ready!";
+    }
 
-      var statusIdx = Math.min(
-        statusTexts.length - 1,
-        Math.floor((percent / 100) * statusTexts.length)
-      );
-      statusMsg.textContent = statusTexts[statusIdx];
+    function setProcessCopy(mode) {
+      processMode = mode;
+      var paused = mode === "paused";
+      progressBar.classList.toggle("is-paused", paused);
+      timerText.classList.toggle("is-paused", paused);
 
-      if (remaining <= 0) {
-        if (timerInterval) {
-          clearInterval(timerInterval);
-          timerInterval = null;
-        }
-        stepProcess.style.display = "none";
-        stepFinal.style.display = "block";
+      if (mode === "watching") {
+        var percent = Math.min(100, Math.floor((accruedMs / REQUIRED_MS) * 100));
+        var statusIdx = Math.min(
+          watchingStatusTexts.length - 1,
+          Math.floor((percent / 100) * watchingStatusTexts.length)
+        );
+        processBadge.textContent = "Verifying Sponsor View";
+        statusMsg.textContent = watchingStatusTexts[statusIdx];
+        processDesc.textContent = "Keep the Adsterra tab open for 15 seconds. Do not close it.";
+        return;
+      }
+
+      if (mode === "paused") {
+        processBadge.textContent = "Timer Paused";
+        statusMsg.textContent = "Return to the Adsterra tab to continue";
+        processDesc.textContent = "Go back to the Adsterra tab and stay there (" + remainingSec() + "s left). Time does not count while you are here.";
+        return;
+      }
+
+      if (mode === "closed") {
+        processBadge.textContent = "Tab Closed";
+        statusMsg.textContent = "You closed the ad too soon";
+        processDesc.textContent = "You closed the ad too soon. Open it again and stay 15 seconds.";
+        return;
+      }
+
+      processBadge.textContent = "Popup Blocked";
+      statusMsg.textContent = "Adsterra tab did not open";
+      processDesc.textContent = "Your browser blocked the sponsor tab. Tap below to open the Adsterra page, then stay on it for 15 seconds.";
+    }
+
+    function stopTimer() {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
       }
     }
 
-    btnStart.addEventListener("click", function () {
-      if (started) return;
-      started = true;
-      startTime = Date.now();
+    function startTimer() {
+      if (timerInterval || unlocked) return;
+      timerInterval = setInterval(tick, TICK_MS);
+    }
 
-      currentAdLink = adList[Math.floor(Math.random() * adList.length)];
-      openAdTab(currentAdLink);
+    function resetDwell() {
+      accruedMs = 0;
+      lastTick = 0;
+      renderBar();
+    }
 
-      stepStart.style.display = "none";
-      stepProcess.style.display = "block";
-      updateProgress();
+    function revealGetLink() {
+      var old = target.querySelector(".dp-btn-get");
+      if (!old || old.tagName === "A") return;
+      var a = document.createElement("a");
+      a.className = old.className;
+      a.href = destinationURL;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.innerHTML = GET_LINK_LABEL;
+      old.parentNode.replaceChild(a, old);
+    }
 
-      timerInterval = setInterval(updateProgress, 300);
-    });
+    function unlock() {
+      if (unlocked) return;
+      if (accruedMs < REQUIRED_MS) return;
+      unlocked = true;
+      processActive = false;
+      stopTimer();
+      revealGetLink();
+      showStep("final");
+    }
 
-    btnReopen.addEventListener("click", function (e) {
-      e.preventDefault();
-      if (!currentAdLink) {
-        currentAdLink = adList[Math.floor(Math.random() * adList.length)];
+    function tick() {
+      if (unlocked || !processActive) return;
+
+      var now = Date.now();
+      var open = isAdOpen(adWin);
+      var hidden = isLockerHidden();
+
+      if (open && hidden) {
+        if (lastTick) {
+          accruedMs += now - lastTick;
+        }
+        lastTick = now;
+      } else {
+        lastTick = 0;
       }
-      openAdTab(currentAdLink);
-    });
 
-    // Handle tab switching seamlessly so users see immediate updates
-    document.addEventListener("visibilitychange", updateProgress);
-    window.addEventListener("focus", updateProgress);
+      if (accruedMs >= REQUIRED_MS) {
+        renderBar();
+        unlock();
+        return;
+      }
+
+      if (!open) {
+        if (lastOpenFailed) {
+          setProcessCopy("popup");
+        } else if (everOpened) {
+          accruedMs = 0;
+          setProcessCopy("closed");
+        } else {
+          setProcessCopy("popup");
+        }
+        renderBar();
+        return;
+      }
+
+      setProcessCopy(hidden ? "watching" : "paused");
+      renderBar();
+    }
+
+    function attachAdWindow(win) {
+      adWin = win;
+      if (isAdOpen(adWin)) {
+        everOpened = true;
+        lastOpenFailed = false;
+        lastTick = 0;
+        return true;
+      }
+      adWin = null;
+      lastOpenFailed = true;
+      return false;
+    }
+
+    function beginDwell() {
+      if (unlocked) return;
+      if (!currentAdLink) currentAdLink = pickSmartlink();
+
+      processActive = true;
+      showStep("process");
+      renderBar();
+
+      if (!attachAdWindow(openAdTab(currentAdLink))) {
+        setProcessCopy("popup");
+        renderBar();
+        startTimer();
+        return;
+      }
+
+      setProcessCopy(isLockerHidden() ? "watching" : "paused");
+      startTimer();
+      tick();
+    }
+
+    function runUnlockAttempt() {
+      if (unlocked || busy) return;
+      busy = true;
+
+      var startHtml = btnStart.innerHTML;
+      btnStart.disabled = true;
+      btnRetry.disabled = true;
+      btnStart.textContent = "Checking…";
+      btnRetry.textContent = "Checking…";
+
+      detectAdBlock(function (blocked) {
+        busy = false;
+        btnStart.disabled = false;
+        btnRetry.disabled = false;
+        btnStart.innerHTML = startHtml;
+        btnRetry.textContent = "I paused it — try again";
+
+        if (blocked) {
+          processActive = false;
+          adWin = null;
+          everOpened = false;
+          resetDwell();
+          stopTimer();
+          showStep("blocked");
+          return;
+        }
+
+        beginDwell();
+      });
+    }
+
+    function reopenSmartlink(e) {
+      if (e) e.preventDefault();
+      if (unlocked || busy) return;
+      busy = true;
+
+      detectAdBlock(function (blocked) {
+        busy = false;
+        if (blocked) {
+          processActive = false;
+          adWin = null;
+          everOpened = false;
+          resetDwell();
+          stopTimer();
+          showStep("blocked");
+          return;
+        }
+
+        if (!currentAdLink) currentAdLink = pickSmartlink();
+        processActive = true;
+        showStep("process");
+
+        if (!attachAdWindow(openAdTab(currentAdLink))) {
+          setProcessCopy("popup");
+          renderBar();
+          startTimer();
+          return;
+        }
+
+        setProcessCopy(isLockerHidden() ? "watching" : "paused");
+        startTimer();
+        tick();
+      });
+    }
+
+    btnStart.addEventListener("click", runUnlockAttempt);
+    btnRetry.addEventListener("click", runUnlockAttempt);
+    btnReopen.addEventListener("click", reopenSmartlink);
+
+    document.addEventListener("visibilitychange", tick);
+    window.addEventListener("focus", tick);
+    window.addEventListener("blur", tick);
 
     window.addEventListener("beforeunload", function () {
-      if (timerInterval) clearInterval(timerInterval);
+      stopTimer();
     });
 
-    // Fast and smooth Copy action
     btnCopy.addEventListener("click", function () {
+      if (!unlocked) return;
+
       function showCopied() {
         btnCopy.classList.add("copied");
-        btnCopy.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> COPIED TO CLIPBOARD!';
+        btnCopy.innerHTML = COPIED_LABEL;
         setTimeout(function () {
           btnCopy.classList.remove("copied");
-          btnCopy.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg> COPY LINK';
+          btnCopy.innerHTML = COPY_LINK_LABEL;
         }, 2500);
       }
 
