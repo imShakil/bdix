@@ -1,7 +1,30 @@
 {
-  "segmentCount": 2,
-  "segmentDuration": 6.0,
+  "segmentCount": 5,
+  "totalDuration": 30.156,
+  "segmentDuration": 6.031,
   "prefix": "seg_",
   "ext": ".ts",
-  "generatedAt": "2026-09-04T10:04:13Z"
+  "segments": [
+    {
+      "filename": "seg_000.ts",
+      "duration": 6.048
+    },
+    {
+      "filename": "seg_001.ts",
+      "duration": 6.048
+    },
+    {
+      "filename": "seg_002.ts",
+      "duration": 6.006
+    },
+    {
+      "filename": "seg_003.ts",
+      "duration": 6.048
+    },
+    {
+      "filename": "seg_004.ts",
+      "duration": 6.006
+    }
+  ],
+  "generatedAt": "2026-09-04T10:54:25.849Z"
 }
